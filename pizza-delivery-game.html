@@ -397,20 +397,12 @@
                 }
             });
 
-            // Draw player (blue square)
-            ctx.fillStyle = '#0080ff';
+            // Draw player (blue when empty, yellow when carrying pizzas)
+            ctx.fillStyle = game.player.pizzasCarried > 0 ? '#ffff00' : '#0080ff';
             const playerX = gridToPixel(game.player.gridX) + 5;
             const playerY = gridToPixel(game.player.gridY) + 5;
             const playerSize = gameConfig.cellSize - 10;
             ctx.fillRect(playerX, playerY, playerSize, playerSize);
-
-            // Draw pizza count indicator on player
-            if (game.player.pizzasCarried > 0) {
-                ctx.fillStyle = '#ffff00';
-                for (let i = 0; i < game.player.pizzasCarried; i++) {
-                    ctx.fillRect(playerX + (i * 15), playerY - 12, 10, 10);
-                }
-            }
         }
 
         // Game loop
