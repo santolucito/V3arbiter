@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pizza Delivery Pixel Game</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            background-color: #222;
+            color: white;
+            font-family: monospace;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        canvas {
+            border: 2px solid #fff;
+            background-color: #333;
+        }
+        .info {
+            margin-top: 10px;
+            text-align: center;
+        }
+        .controls {
+            margin-bottom: 10px;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div class="controls">
+        <p>Use WASD or Arrow Keys to move the blue pixel (player)</p>
+        <p>Pick up pizzas (red pixels) from the counter and deliver to guests (green pixels)</p>
+        <button onclick="loadConfig()">Load Custom Config</button>
+        <input type="file" id="configFile" accept=".json" style="display:none" onchange="handleConfigFile(event)">
+    </div>
+    <canvas id="gameCanvas" width="800" height="600"></canvas>
+    <div class="info">
+        <p>Score: <span id="score">0</span> | Pizzas Carried: <span id="pizzasCarried">0</span></p>
+        <p>Active Requests: <span id="activeRequests">0</span></p>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreElement = document.getElementById('score');
+        const pizzasCarriedElement = document.getElementById('pizzasCarried');
+        const activeRequestsElement = document.getElementById('activeRequests');
+
+        // Default game configuration
+        let gameConfig = {
+            maxGuests: 2,
+            maxPizzasAtCounter: 1,
+            playerSpeed: 3,
+            pixelSize: 20,
+            playerMaxPizzas: 3,
+            scorePerDelivery: 10,
+            pizzaRespawnDelay: 2000,
+            guestRespawnDelay: 3000,
+            canvas: {
+                width: 800,
+                height: 600
+            },
+            counter: {
+                x: 700,
+                y: 100,
+                width: 80,
+                height: 100
+            },
+            player: {
+                startX: 50,
+                startY: 300
+            }
+        };
+
+        // Game state
+        const game = {
+            player: {
+                x: gameConfig.player.startX,
+                y: gameConfig.player.startY,
+                pizzasCarried: 0,
+                maxPizzas: gameConfig.playerMaxPizzas
+            },
+            pizzas: [],
+            guests: [],
+            counter: gameConfig.counter,
+            score: 0,
+            keys: {}
+        };
+
+        // Initialize game objects
+        function initGame() {
+            // Create initial pizzas at counter
+            spawnPizza();
+
+            // Create initial guests
+            spawnGuest();
+            spawnGuest();
+        }
+
+        function spawnPizza() {
+            if (game.pizzas.length < gameConfig.maxPizzasAtCounter) {
+                game.pizzas.push({
+                    x: game.counter.x + Math.random() * (game.counter.width - gameConfig.pixelSize),
+                    y: game.counter.y + Math.random() * (game.counter.height - gameConfig.pixelSize),
+                    available: true
+                });
+            }
+        }
+
+        function spawnGuest() {
+            if (game.guests.length < gameConfig.maxGuests) {
+                let x, y;
+                do {
+                    x = Math.random() * (canvas.width - gameConfig.pixelSize);
+                    y = Math.random() * (canvas.height - gameConfig.pixelSize);
+                } while (
+                    // Don't spawn guests too close to counter or player
+                    (x > game.counter.x - 100 && x < game.counter.x + game.counter.width + 100 &&
+                     y > game.counter.y - 100 && y < game.counter.y + game.counter.height + 100) ||
+                    (Math.abs(x - game.player.x) < 100 && Math.abs(y - game.player.y) < 100)
+                );
+
+                game.guests.push({
+                    x: x,
+                    y: y,
+                    needsPizza: true,
+                    requestTime: Date.now()
+                });
+            }
+        }
+
+        // Input handling
+        document.addEventListener('keydown', (e) => {
+            game.keys[e.key.toLowerCase()] = true;
+        });
+
+        document.addEventListener('keyup', (e) => {
+            game.keys[e.key.toLowerCase()] = false;
+        });
+
+        // Update game logic
+        function update() {
+            // Player movement
+            if (game.keys['w'] || game.keys['arrowup']) {
+                game.player.y = Math.max(0, game.player.y - gameConfig.playerSpeed);
+            }
+            if (game.keys['s'] || game.keys['arrowdown']) {
+                game.player.y = Math.min(canvas.height - gameConfig.pixelSize, game.player.y + gameConfig.playerSpeed);
+            }
+            if (game.keys['a'] || game.keys['arrowleft']) {
+                game.player.x = Math.max(0, game.player.x - gameConfig.playerSpeed);
+            }
+            if (game.keys['d'] || game.keys['arrowright']) {
+                game.player.x = Math.min(canvas.width - gameConfig.pixelSize, game.player.x + gameConfig.playerSpeed);
+            }
+
+            // Check pizza pickup
+            game.pizzas.forEach((pizza, index) => {
+                if (pizza.available &&
+                    game.player.pizzasCarried < game.player.maxPizzas &&
+                    isColliding(game.player, pizza)) {
+                    game.player.pizzasCarried++;
+                    game.pizzas.splice(index, 1);
+
+                    // Spawn new pizza after a delay
+                    setTimeout(spawnPizza, gameConfig.pizzaRespawnDelay);
+                }
+            });
+
+            // Check pizza delivery to guests
+            game.guests.forEach((guest, index) => {
+                if (guest.needsPizza &&
+                    game.player.pizzasCarried > 0 &&
+                    isColliding(game.player, guest)) {
+                    game.player.pizzasCarried--;
+                    game.score += gameConfig.scorePerDelivery;
+                    game.guests.splice(index, 1);
+
+                    // Spawn new guest after delivery
+                    setTimeout(spawnGuest, gameConfig.guestRespawnDelay);
+                }
+            });
+
+            // Update UI
+            scoreElement.textContent = game.score;
+            pizzasCarriedElement.textContent = game.player.pizzasCarried;
+            activeRequestsElement.textContent = game.guests.filter(g => g.needsPizza).length;
+        }
+
+        function isColliding(obj1, obj2) {
+            return obj1.x < obj2.x + gameConfig.pixelSize &&
+                   obj1.x + gameConfig.pixelSize > obj2.x &&
+                   obj1.y < obj2.y + gameConfig.pixelSize &&
+                   obj1.y + gameConfig.pixelSize > obj2.y;
+        }
+
+        // Render game
+        function render() {
+            // Clear canvas
+            ctx.fillStyle = '#333';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Draw counter
+            ctx.fillStyle = '#666';
+            ctx.fillRect(game.counter.x, game.counter.y, game.counter.width, game.counter.height);
+            ctx.fillStyle = '#888';
+            ctx.fillRect(game.counter.x + 2, game.counter.y + 2, game.counter.width - 4, game.counter.height - 4);
+
+            // Draw pizzas (red pixels)
+            ctx.fillStyle = '#ff0000';
+            game.pizzas.forEach(pizza => {
+                ctx.fillRect(pizza.x, pizza.y, gameConfig.pixelSize, gameConfig.pixelSize);
+            });
+
+            // Draw guests (green pixels)
+            ctx.fillStyle = '#00ff00';
+            game.guests.forEach(guest => {
+                if (guest.needsPizza) {
+                    ctx.fillRect(guest.x, guest.y, gameConfig.pixelSize, gameConfig.pixelSize);
+
+                    // Draw request indicator (small white dot)
+                    ctx.fillStyle = '#ffffff';
+                    ctx.fillRect(guest.x + gameConfig.pixelSize/2 - 2, guest.y - 8, 4, 4);
+                    ctx.fillStyle = '#00ff00';
+                }
+            });
+
+            // Draw player (blue pixel)
+            ctx.fillStyle = '#0080ff';
+            ctx.fillRect(game.player.x, game.player.y, gameConfig.pixelSize, gameConfig.pixelSize);
+
+            // Draw pizza count indicator on player
+            if (game.player.pizzasCarried > 0) {
+                ctx.fillStyle = '#ffff00';
+                for (let i = 0; i < game.player.pizzasCarried; i++) {
+                    ctx.fillRect(game.player.x + (i * 4), game.player.y - 8, 3, 3);
+                }
+            }
+        }
+
+        // Game loop
+        function gameLoop() {
+            update();
+            render();
+            requestAnimationFrame(gameLoop);
+        }
+
+        // Configuration loading functions
+        function loadConfig() {
+            document.getElementById('configFile').click();
+        }
+
+        function handleConfigFile(event) {
+            const file = event.target.files[0];
+            if (file && file.type === 'application/json') {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    try {
+                        const newConfig = JSON.parse(e.target.result);
+                        applyConfig(newConfig);
+                        resetGame();
+                    } catch (error) {
+                        alert('Error loading config file: ' + error.message);
+                    }
+                };
+                reader.readAsText(file);
+            }
+        }
+
+        function applyConfig(newConfig) {
+            // Merge new config with existing config
+            Object.assign(gameConfig, newConfig);
+
+            // Update canvas size if specified
+            if (newConfig.canvas) {
+                canvas.width = gameConfig.canvas.width;
+                canvas.height = gameConfig.canvas.height;
+            }
+
+            // Update game counter reference
+            game.counter = gameConfig.counter;
+        }
+
+        function resetGame() {
+            // Reset game state
+            game.player.x = gameConfig.player.startX;
+            game.player.y = gameConfig.player.startY;
+            game.player.pizzasCarried = 0;
+            game.player.maxPizzas = gameConfig.playerMaxPizzas;
+            game.pizzas = [];
+            game.guests = [];
+            game.score = 0;
+
+            // Reinitialize game objects
+            initGame();
+        }
+
+        // Auto-load default config on startup
+        async function loadDefaultConfig() {
+            try {
+                const response = await fetch('game-config.json');
+                if (response.ok) {
+                    const config = await response.json();
+                    applyConfig(config);
+                }
+            } catch (error) {
+                console.log('Using default configuration (could not load game-config.json)');
+            }
+        }
+
+        // Start game
+        loadDefaultConfig().then(() => {
+            initGame();
+            gameLoop();
+        });
+    </script>
+</body>
+</html>
