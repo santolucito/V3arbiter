@@ -1,24 +1,20 @@
 {
   "maxGuests": 2,
   "maxPizzasAtCounter": 1,
-  "playerSpeed": 3,
-  "pixelSize": 20,
+  "gridSize": 5,
+  "cellSize": 80,
   "playerMaxPizzas": 3,
   "scorePerDelivery": 10,
   "pizzaRespawnDelay": 2000,
   "guestRespawnDelay": 3000,
-  "canvas": {
-    "width": 800,
-    "height": 600
-  },
   "counter": {
-    "x": 700,
-    "y": 100,
-    "width": 80,
-    "height": 100
+    "gridX": 4,
+    "gridY": 1,
+    "gridWidth": 1,
+    "gridHeight": 2
   },
   "player": {
-    "startX": 50,
-    "startY": 300
+    "startGridX": 0,
+    "startGridY": 2
   }
 }

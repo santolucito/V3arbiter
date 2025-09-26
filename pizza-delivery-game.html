@@ -2,30 +2,95 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <title>Pizza Delivery Pixel Game</title>
     <style>
         body {
             margin: 0;
-            padding: 20px;
+            padding: 10px;
             background-color: #222;
             color: white;
             font-family: monospace;
             display: flex;
             flex-direction: column;
             align-items: center;
+            touch-action: manipulation;
         }
         canvas {
             border: 2px solid #fff;
             background-color: #333;
+            max-width: 90vw;
+            max-height: 60vh;
         }
         .info {
             margin-top: 10px;
             text-align: center;
+            font-size: 14px;
         }
         .controls {
             margin-bottom: 10px;
             text-align: center;
+            font-size: 12px;
+        }
+        .mobile-controls {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            grid-template-rows: 1fr 1fr 1fr;
+            gap: 10px;
+            margin-top: 15px;
+            width: 200px;
+            height: 200px;
+        }
+        .mobile-btn {
+            background-color: #555;
+            border: 2px solid #777;
+            color: white;
+            font-size: 18px;
+            font-weight: bold;
+            border-radius: 8px;
+            cursor: pointer;
+            touch-action: manipulation;
+            user-select: none;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .mobile-btn:active {
+            background-color: #888;
+            border-color: #aaa;
+        }
+        .mobile-btn[data-direction="up"] {
+            grid-column: 2;
+            grid-row: 1;
+        }
+        .mobile-btn[data-direction="left"] {
+            grid-column: 1;
+            grid-row: 2;
+        }
+        .mobile-btn[data-direction="right"] {
+            grid-column: 3;
+            grid-row: 2;
+        }
+        .mobile-btn[data-direction="down"] {
+            grid-column: 2;
+            grid-row: 3;
+        }
+        @media (min-width: 768px) {
+            .mobile-controls {
+                display: none;
+            }
+        }
+        @media (max-width: 767px) {
+            body {
+                padding: 5px;
+            }
+            canvas {
+                max-width: 95vw;
+                max-height: 50vh;
+            }
+            .controls p:first-child {
+                display: none;
+            }
         }
     </style>
 </head>
@@ -42,6 +107,13 @@
         <p>Active Requests: <span id="activeRequests">0</span></p>
     </div>
 
+    <div class="mobile-controls">
+        <div class="mobile-btn" data-direction="up">↑</div>
+        <div class="mobile-btn" data-direction="left">←</div>
+        <div class="mobile-btn" data-direction="right">→</div>
+        <div class="mobile-btn" data-direction="down">↓</div>
+    </div>
+
     <script>
         const canvas = document.getElementById('gameCanvas');
         const ctx = canvas.getContext('2d');
@@ -49,37 +121,37 @@
         const pizzasCarriedElement = document.getElementById('pizzasCarried');
         const activeRequestsElement = document.getElementById('activeRequests');
 
-        // Default game configuration
+        // Default game configuration - 5x5 grid system
         let gameConfig = {
             maxGuests: 2,
             maxPizzasAtCounter: 1,
-            playerSpeed: 3,
-            pixelSize: 20,
+            gridSize: 5, // 5x5 grid
+            cellSize: 80, // Each cell is 80px
             playerMaxPizzas: 3,
             scorePerDelivery: 10,
             pizzaRespawnDelay: 2000,
             guestRespawnDelay: 3000,
             canvas: {
-                width: 800,
-                height: 600
+                width: 400, // 5 * 80
+                height: 400 // 5 * 80
             },
             counter: {
-                x: 700,
-                y: 100,
-                width: 80,
-                height: 100
+                gridX: 4, // rightmost column
+                gridY: 1, // second row
+                gridWidth: 1,
+                gridHeight: 2
             },
             player: {
-                startX: 50,
-                startY: 300
+                startGridX: 0,
+                startGridY: 2
             }
         };
 
-        // Game state
+        // Game state with grid positions
         const game = {
             player: {
-                x: gameConfig.player.startX,
-                y: gameConfig.player.startY,
+                gridX: gameConfig.player.startGridX,
+                gridY: gameConfig.player.startGridY,
                 pizzasCarried: 0,
                 maxPizzas: gameConfig.playerMaxPizzas
             },
@@ -87,8 +159,22 @@
             guests: [],
             counter: gameConfig.counter,
             score: 0,
-            keys: {}
+            keys: {},
+            touchControls: {}
         };
+
+        // Helper functions for grid conversion
+        function gridToPixel(gridPos) {
+            return gridPos * gameConfig.cellSize;
+        }
+
+        function pixelToGrid(pixelPos) {
+            return Math.floor(pixelPos / gameConfig.cellSize);
+        }
+
+        function isValidGridPosition(x, y) {
+            return x >= 0 && x < gameConfig.gridSize && y >= 0 && y < gameConfig.gridSize;
+        }
 
         // Initialize game objects
         function initGame() {
@@ -102,9 +188,13 @@
 
         function spawnPizza() {
             if (game.pizzas.length < gameConfig.maxPizzasAtCounter) {
+                // Spawn pizza in counter area
+                const counterGridX = gameConfig.counter.gridX;
+                const counterGridY = gameConfig.counter.gridY + Math.floor(Math.random() * gameConfig.counter.gridHeight);
+
                 game.pizzas.push({
-                    x: game.counter.x + Math.random() * (game.counter.width - gameConfig.pixelSize),
-                    y: game.counter.y + Math.random() * (game.counter.height - gameConfig.pixelSize),
+                    gridX: counterGridX,
+                    gridY: counterGridY,
                     available: true
                 });
             }
@@ -112,27 +202,27 @@
 
         function spawnGuest() {
             if (game.guests.length < gameConfig.maxGuests) {
-                let x, y;
+                let gridX, gridY;
                 do {
-                    x = Math.random() * (canvas.width - gameConfig.pixelSize);
-                    y = Math.random() * (canvas.height - gameConfig.pixelSize);
+                    gridX = Math.floor(Math.random() * gameConfig.gridSize);
+                    gridY = Math.floor(Math.random() * gameConfig.gridSize);
                 } while (
-                    // Don't spawn guests too close to counter or player
-                    (x > game.counter.x - 100 && x < game.counter.x + game.counter.width + 100 &&
-                     y > game.counter.y - 100 && y < game.counter.y + game.counter.height + 100) ||
-                    (Math.abs(x - game.player.x) < 100 && Math.abs(y - game.player.y) < 100)
+                    // Don't spawn guests in counter area or on player
+                    (gridX >= gameConfig.counter.gridX - 1 && gridX <= gameConfig.counter.gridX + gameConfig.counter.gridWidth &&
+                     gridY >= gameConfig.counter.gridY - 1 && gridY <= gameConfig.counter.gridY + gameConfig.counter.gridHeight) ||
+                    (gridX === game.player.gridX && gridY === game.player.gridY)
                 );
 
                 game.guests.push({
-                    x: x,
-                    y: y,
+                    gridX: gridX,
+                    gridY: gridY,
                     needsPizza: true,
                     requestTime: Date.now()
                 });
             }
         }
 
-        // Input handling
+        // Input handling - keyboard
         document.addEventListener('keydown', (e) => {
             game.keys[e.key.toLowerCase()] = true;
         });
@@ -141,27 +231,82 @@
             game.keys[e.key.toLowerCase()] = false;
         });
 
+        // Input handling - mobile touch controls
+        document.addEventListener('DOMContentLoaded', () => {
+            const mobileButtons = document.querySelectorAll('.mobile-btn');
+            mobileButtons.forEach(btn => {
+                const direction = btn.dataset.direction;
+
+                btn.addEventListener('touchstart', (e) => {
+                    e.preventDefault();
+                    game.touchControls[direction] = true;
+                }, {passive: false});
+
+                btn.addEventListener('touchend', (e) => {
+                    e.preventDefault();
+                    game.touchControls[direction] = false;
+                }, {passive: false});
+
+                btn.addEventListener('mousedown', (e) => {
+                    e.preventDefault();
+                    game.touchControls[direction] = true;
+                });
+
+                btn.addEventListener('mouseup', (e) => {
+                    e.preventDefault();
+                    game.touchControls[direction] = false;
+                });
+            });
+        });
+
+        // Movement cooldown to prevent too rapid movement
+        let lastMoveTime = 0;
+        const moveCooldown = 200; // ms
+
         // Update game logic
         function update() {
-            // Player movement
-            if (game.keys['w'] || game.keys['arrowup']) {
-                game.player.y = Math.max(0, game.player.y - gameConfig.playerSpeed);
-            }
-            if (game.keys['s'] || game.keys['arrowdown']) {
-                game.player.y = Math.min(canvas.height - gameConfig.pixelSize, game.player.y + gameConfig.playerSpeed);
-            }
-            if (game.keys['a'] || game.keys['arrowleft']) {
-                game.player.x = Math.max(0, game.player.x - gameConfig.playerSpeed);
-            }
-            if (game.keys['d'] || game.keys['arrowright']) {
-                game.player.x = Math.min(canvas.width - gameConfig.pixelSize, game.player.x + gameConfig.playerSpeed);
+            const currentTime = Date.now();
+
+            // Grid-based player movement with cooldown
+            if (currentTime - lastMoveTime > moveCooldown) {
+                let moved = false;
+
+                if (game.keys['w'] || game.keys['arrowup'] || game.touchControls['up']) {
+                    if (isValidGridPosition(game.player.gridX, game.player.gridY - 1)) {
+                        game.player.gridY--;
+                        moved = true;
+                    }
+                }
+                if (game.keys['s'] || game.keys['arrowdown'] || game.touchControls['down']) {
+                    if (isValidGridPosition(game.player.gridX, game.player.gridY + 1)) {
+                        game.player.gridY++;
+                        moved = true;
+                    }
+                }
+                if (game.keys['a'] || game.keys['arrowleft'] || game.touchControls['left']) {
+                    if (isValidGridPosition(game.player.gridX - 1, game.player.gridY)) {
+                        game.player.gridX--;
+                        moved = true;
+                    }
+                }
+                if (game.keys['d'] || game.keys['arrowright'] || game.touchControls['right']) {
+                    if (isValidGridPosition(game.player.gridX + 1, game.player.gridY)) {
+                        game.player.gridX++;
+                        moved = true;
+                    }
+                }
+
+                if (moved) {
+                    lastMoveTime = currentTime;
+                }
             }
 
-            // Check pizza pickup
+            // Check pizza pickup (grid-based collision)
             game.pizzas.forEach((pizza, index) => {
                 if (pizza.available &&
                     game.player.pizzasCarried < game.player.maxPizzas &&
-                    isColliding(game.player, pizza)) {
+                    game.player.gridX === pizza.gridX &&
+                    game.player.gridY === pizza.gridY) {
                     game.player.pizzasCarried++;
                     game.pizzas.splice(index, 1);
 
@@ -170,11 +315,12 @@
                 }
             });
 
-            // Check pizza delivery to guests
+            // Check pizza delivery to guests (grid-based collision)
             game.guests.forEach((guest, index) => {
                 if (guest.needsPizza &&
                     game.player.pizzasCarried > 0 &&
-                    isColliding(game.player, guest)) {
+                    game.player.gridX === guest.gridX &&
+                    game.player.gridY === guest.gridY) {
                     game.player.pizzasCarried--;
                     game.score += gameConfig.scorePerDelivery;
                     game.guests.splice(index, 1);
@@ -190,53 +336,79 @@
             activeRequestsElement.textContent = game.guests.filter(g => g.needsPizza).length;
         }
 
-        function isColliding(obj1, obj2) {
-            return obj1.x < obj2.x + gameConfig.pixelSize &&
-                   obj1.x + gameConfig.pixelSize > obj2.x &&
-                   obj1.y < obj2.y + gameConfig.pixelSize &&
-                   obj1.y + gameConfig.pixelSize > obj2.y;
-        }
+        // Grid collision is now handled by comparing grid positions directly
 
-        // Render game
+        // Render game with grid system
         function render() {
             // Clear canvas
             ctx.fillStyle = '#333';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-            // Draw counter
-            ctx.fillStyle = '#666';
-            ctx.fillRect(game.counter.x, game.counter.y, game.counter.width, game.counter.height);
-            ctx.fillStyle = '#888';
-            ctx.fillRect(game.counter.x + 2, game.counter.y + 2, game.counter.width - 4, game.counter.height - 4);
+            // Draw grid lines (optional visual aid)
+            ctx.strokeStyle = '#444';
+            ctx.lineWidth = 1;
+            for (let i = 0; i <= gameConfig.gridSize; i++) {
+                const pos = i * gameConfig.cellSize;
+                // Vertical lines
+                ctx.beginPath();
+                ctx.moveTo(pos, 0);
+                ctx.lineTo(pos, canvas.height);
+                ctx.stroke();
+                // Horizontal lines
+                ctx.beginPath();
+                ctx.moveTo(0, pos);
+                ctx.lineTo(canvas.width, pos);
+                ctx.stroke();
+            }
 
-            // Draw pizzas (red pixels)
+            // Draw counter area
+            ctx.fillStyle = '#666';
+            const counterX = gridToPixel(gameConfig.counter.gridX);
+            const counterY = gridToPixel(gameConfig.counter.gridY);
+            const counterWidth = gameConfig.counter.gridWidth * gameConfig.cellSize;
+            const counterHeight = gameConfig.counter.gridHeight * gameConfig.cellSize;
+            ctx.fillRect(counterX, counterY, counterWidth, counterHeight);
+
+            ctx.fillStyle = '#888';
+            ctx.fillRect(counterX + 4, counterY + 4, counterWidth - 8, counterHeight - 8);
+
+            // Draw pizzas (red squares)
             ctx.fillStyle = '#ff0000';
             game.pizzas.forEach(pizza => {
-                ctx.fillRect(pizza.x, pizza.y, gameConfig.pixelSize, gameConfig.pixelSize);
+                const x = gridToPixel(pizza.gridX) + 10;
+                const y = gridToPixel(pizza.gridY) + 10;
+                const size = gameConfig.cellSize - 20;
+                ctx.fillRect(x, y, size, size);
             });
 
-            // Draw guests (green pixels)
+            // Draw guests (green squares)
             ctx.fillStyle = '#00ff00';
             game.guests.forEach(guest => {
                 if (guest.needsPizza) {
-                    ctx.fillRect(guest.x, guest.y, gameConfig.pixelSize, gameConfig.pixelSize);
+                    const x = gridToPixel(guest.gridX) + 10;
+                    const y = gridToPixel(guest.gridY) + 10;
+                    const size = gameConfig.cellSize - 20;
+                    ctx.fillRect(x, y, size, size);
 
-                    // Draw request indicator (small white dot)
-                    ctx.fillStyle = '#ffffff';
-                    ctx.fillRect(guest.x + gameConfig.pixelSize/2 - 2, guest.y - 8, 4, 4);
-                    ctx.fillStyle = '#00ff00';
+                    // Draw request indicator (white border)
+                    ctx.strokeStyle = '#ffffff';
+                    ctx.lineWidth = 3;
+                    ctx.strokeRect(x, y, size, size);
                 }
             });
 
-            // Draw player (blue pixel)
+            // Draw player (blue square)
             ctx.fillStyle = '#0080ff';
-            ctx.fillRect(game.player.x, game.player.y, gameConfig.pixelSize, gameConfig.pixelSize);
+            const playerX = gridToPixel(game.player.gridX) + 5;
+            const playerY = gridToPixel(game.player.gridY) + 5;
+            const playerSize = gameConfig.cellSize - 10;
+            ctx.fillRect(playerX, playerY, playerSize, playerSize);
 
             // Draw pizza count indicator on player
             if (game.player.pizzasCarried > 0) {
                 ctx.fillStyle = '#ffff00';
                 for (let i = 0; i < game.player.pizzasCarried; i++) {
-                    ctx.fillRect(game.player.x + (i * 4), game.player.y - 8, 3, 3);
+                    ctx.fillRect(playerX + (i * 15), playerY - 12, 10, 10);
                 }
             }
         }
@@ -274,25 +446,24 @@
             // Merge new config with existing config
             Object.assign(gameConfig, newConfig);
 
-            // Update canvas size if specified
-            if (newConfig.canvas) {
-                canvas.width = gameConfig.canvas.width;
-                canvas.height = gameConfig.canvas.height;
-            }
+            // Update canvas size based on grid
+            canvas.width = gameConfig.gridSize * gameConfig.cellSize;
+            canvas.height = gameConfig.gridSize * gameConfig.cellSize;
 
             // Update game counter reference
             game.counter = gameConfig.counter;
         }
 
         function resetGame() {
-            // Reset game state
-            game.player.x = gameConfig.player.startX;
-            game.player.y = gameConfig.player.startY;
+            // Reset game state with grid positions
+            game.player.gridX = gameConfig.player.startGridX;
+            game.player.gridY = gameConfig.player.startGridY;
             game.player.pizzasCarried = 0;
             game.player.maxPizzas = gameConfig.playerMaxPizzas;
             game.pizzas = [];
             game.guests = [];
             game.score = 0;
+            game.touchControls = {};
 
             // Reinitialize game objects
             initGame();
