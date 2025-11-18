@@ -92,6 +92,48 @@
                 display: none;
             }
         }
+        .recording-controls {
+            margin: 15px 0;
+            text-align: center;
+        }
+        .record-btn {
+            background-color: #333;
+            border: 2px solid #555;
+            color: white;
+            padding: 10px 20px;
+            margin: 0 5px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-family: monospace;
+            font-size: 14px;
+        }
+        .record-btn:hover {
+            background-color: #555;
+        }
+        .record-btn.recording {
+            background-color: #ff0000;
+            border-color: #ff3333;
+            animation: pulse 1.5s infinite;
+        }
+        .record-btn.disabled {
+            background-color: #666;
+            border-color: #888;
+            cursor: not-allowed;
+            opacity: 0.5;
+        }
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.7; }
+            100% { opacity: 1; }
+        }
+        .recording-status {
+            margin-top: 10px;
+            font-size: 12px;
+            color: #ccc;
+        }
+        .recording-status.active {
+            color: #ff6666;
+        }
     </style>
 </head>
 <body>
@@ -105,6 +147,12 @@
     <div class="info">
         <p>Score: <span id="score">0</span> | Pizzas Carried: <span id="pizzasCarried">0</span></p>
         <p>Active Requests: <span id="activeRequests">0</span></p>
+    </div>
+
+    <div class="recording-controls">
+        <button id="recordBtn" class="record-btn" onclick="toggleRecording()">🔴 Start Recording</button>
+        <button id="exportBtn" class="record-btn disabled" onclick="exportRecording()" disabled>📥 Export Session</button>
+        <div id="recordingStatus" class="recording-status">Ready to record gameplay and audio</div>
     </div>
 
     <div class="mobile-controls">
@@ -162,6 +210,36 @@
             keys: {},
             touchControls: {}
         };
+
+        // Recording system
+        const recording = {
+            isRecording: false,
+            startTime: null,
+            keystrokes: [],
+            audioData: null,
+            transcription: [],
+            mediaRecorder: null,
+            recognition: null,
+            audioChunks: [],
+            gameFrames: [],
+            gameId: null,
+            actionCounter: 0
+        };
+
+        // Generate unique IDs
+        function generateGameId() {
+            const timestamp = Date.now().toString(36);
+            const random = Math.random().toString(36).substr(2, 8);
+            return `ls20-${timestamp}${random}`;
+        }
+
+        function generateGuid() {
+            return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+                const r = Math.random() * 16 | 0;
+                const v = c === 'x' ? r : (r & 0x3 | 0x8);
+                return v.toString(16);
+            });
+        }
 
         // Helper functions for grid conversion
         function gridToPixel(gridPos) {
@@ -225,10 +303,20 @@
         // Input handling - keyboard
         document.addEventListener('keydown', (e) => {
             game.keys[e.key.toLowerCase()] = true;
+
+            // Record keystroke if recording
+            if (recording.isRecording) {
+                recordKeystroke(e.key.toLowerCase(), 'keydown', Date.now() - recording.startTime);
+            }
         });
 
         document.addEventListener('keyup', (e) => {
             game.keys[e.key.toLowerCase()] = false;
+
+            // Record keystroke if recording
+            if (recording.isRecording) {
+                recordKeystroke(e.key.toLowerCase(), 'keyup', Date.now() - recording.startTime);
+            }
         });
 
         // Input handling - mobile touch controls
@@ -240,21 +328,41 @@
                 btn.addEventListener('touchstart', (e) => {
                     e.preventDefault();
                     game.touchControls[direction] = true;
+
+                    // Record touch if recording
+                    if (recording.isRecording) {
+                        recordKeystroke(direction, 'touchstart', Date.now() - recording.startTime);
+                    }
                 }, {passive: false});
 
                 btn.addEventListener('touchend', (e) => {
                     e.preventDefault();
                     game.touchControls[direction] = false;
+
+                    // Record touch if recording
+                    if (recording.isRecording) {
+                        recordKeystroke(direction, 'touchend', Date.now() - recording.startTime);
+                    }
                 }, {passive: false});
 
                 btn.addEventListener('mousedown', (e) => {
                     e.preventDefault();
                     game.touchControls[direction] = true;
+
+                    // Record mouse if recording
+                    if (recording.isRecording) {
+                        recordKeystroke(direction, 'mousedown', Date.now() - recording.startTime);
+                    }
                 });
 
                 btn.addEventListener('mouseup', (e) => {
                     e.preventDefault();
                     game.touchControls[direction] = false;
+
+                    // Record mouse if recording
+                    if (recording.isRecording) {
+                        recordKeystroke(direction, 'mouseup', Date.now() - recording.startTime);
+                    }
                 });
             });
         });
@@ -472,6 +580,354 @@
             } catch (error) {
                 console.log('Using default configuration (could not load game-config.json)');
             }
+        }
+
+        // Frame capture function
+        function captureGameFrame() {
+            return {
+                player: {
+                    gridX: game.player.gridX,
+                    gridY: game.player.gridY,
+                    pizzasCarried: game.player.pizzasCarried
+                },
+                pizzas: game.pizzas.map(p => ({ gridX: p.gridX, gridY: p.gridY })),
+                guests: game.guests.map(g => ({
+                    gridX: g.gridX,
+                    gridY: g.gridY,
+                    needsPizza: g.needsPizza
+                })),
+                score: game.score,
+                canvas: {
+                    width: canvas.width,
+                    height: canvas.height
+                },
+                grid: {
+                    size: gameConfig.gridSize,
+                    cellSize: gameConfig.cellSize
+                }
+            };
+        }
+
+        // Recording functions
+        function recordKeystroke(key, action, timestamp) {
+            if (!recording.isRecording) return;
+
+            const frame = captureGameFrame();
+            const absoluteTimestamp = new Date(recording.startTime + timestamp).toISOString();
+
+            // Find nearby speech for reasoning
+            const reasoning = findNearbyReasoning(timestamp);
+
+            const gameFrame = {
+                timestamp: absoluteTimestamp,
+                data: {
+                    game_id: recording.gameId,
+                    frame: frame,
+                    state: determineGameState(),
+                    score: game.score,
+                    action_input: {
+                        id: recording.actionCounter++,
+                        data: {
+                            game_id: recording.gameId,
+                            key: key,
+                            action: action,
+                            timestamp: timestamp
+                        },
+                        reasoning: reasoning
+                    },
+                    guid: generateGuid(),
+                    full_reset: false
+                }
+            };
+
+            recording.gameFrames.push(gameFrame);
+
+            // Also keep the old format for backwards compatibility
+            recording.keystrokes.push({
+                key: key,
+                action: action,
+                timestamp: timestamp,
+                gameState: frame
+            });
+        }
+
+        function findNearbyReasoning(actionTimestamp) {
+            // Find speech within 3 seconds before or 1 second after the action
+            const speechBefore = recording.transcription.filter(t =>
+                t.timestamp <= actionTimestamp &&
+                (actionTimestamp - t.timestamp) <= 3000
+            );
+
+            const speechAfter = recording.transcription.filter(t =>
+                t.timestamp > actionTimestamp &&
+                (t.timestamp - actionTimestamp) <= 1000
+            );
+
+            const allSpeech = [...speechBefore, ...speechAfter]
+                .sort((a, b) => Math.abs(a.timestamp - actionTimestamp) - Math.abs(b.timestamp - actionTimestamp));
+
+            return allSpeech.length > 0 ? allSpeech[0].text : "No speech detected";
+        }
+
+        function determineGameState() {
+            // Determine if game is finished or ongoing
+            if (game.score >= 50) return "FINISHED"; // Example win condition
+            if (game.guests.length === 0 && game.pizzas.length === 0) return "FINISHED";
+            return "NOT_FINISHED";
+        }
+
+        async function startRecording() {
+            try {
+                // Request microphone access
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+                // Setup MediaRecorder for audio
+                recording.mediaRecorder = new MediaRecorder(stream);
+                recording.audioChunks = [];
+
+                recording.mediaRecorder.ondataavailable = (event) => {
+                    if (event.data.size > 0) {
+                        recording.audioChunks.push(event.data);
+                    }
+                };
+
+                // Setup Web Speech API for transcription
+                if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+                    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+                    recording.recognition = new SpeechRecognition();
+                    recording.recognition.continuous = true;
+                    recording.recognition.interimResults = true;
+                    recording.recognition.lang = 'en-US';
+
+                    console.log('Speech recognition initialized');
+
+                    recording.recognition.onstart = () => {
+                        console.log('Speech recognition started');
+                        updateStatusMessage('Speech recognition active');
+                    };
+
+                    recording.recognition.onresult = (event) => {
+                        console.log('Speech recognition result:', event);
+                        for (let i = event.resultIndex; i < event.results.length; i++) {
+                            const transcript = event.results[i][0].transcript;
+                            const timestamp = Date.now() - recording.startTime;
+                            const isFinal = event.results[i].isFinal;
+                            const confidence = event.results[i][0].confidence;
+
+                            console.log(`Transcript (${isFinal ? 'final' : 'interim'}):`, transcript);
+
+                            // Update or add transcription entry
+                            if (isFinal) {
+                                recording.transcription.push({
+                                    text: transcript,
+                                    timestamp: timestamp,
+                                    confidence: confidence
+                                });
+                                updateStatusMessage(`Transcribed: "${transcript}"`);
+                            }
+                        }
+                    };
+
+                    recording.recognition.onerror = (event) => {
+                        console.error('Speech recognition error:', event.error);
+                        updateStatusMessage(`Speech recognition error: ${event.error}`);
+                    };
+
+                    recording.recognition.onend = () => {
+                        console.log('Speech recognition ended');
+                        if (recording.isRecording) {
+                            // Restart if still recording
+                            setTimeout(() => {
+                                try {
+                                    recording.recognition.start();
+                                    console.log('Speech recognition restarted');
+                                } catch (e) {
+                                    console.error('Failed to restart speech recognition:', e);
+                                }
+                            }, 100);
+                        }
+                    };
+
+                    try {
+                        recording.recognition.start();
+                        console.log('Starting speech recognition...');
+                    } catch (e) {
+                        console.error('Failed to start speech recognition:', e);
+                        updateStatusMessage('Speech recognition failed to start');
+                    }
+                } else {
+                    console.log('Speech recognition not supported');
+                    updateStatusMessage('Speech recognition not supported in this browser');
+                }
+
+                // Start recording
+                recording.mediaRecorder.start(1000); // Record in 1-second chunks
+                recording.isRecording = true;
+                recording.startTime = Date.now();
+                recording.keystrokes = [];
+                recording.transcription = [];
+                recording.gameFrames = [];
+                recording.gameId = generateGameId();
+                recording.actionCounter = 0;
+
+                updateRecordingUI();
+            } catch (error) {
+                console.error('Error starting recording:', error);
+                alert('Could not access microphone. Recording will only capture keystrokes.');
+
+                // Start keystroke-only recording
+                recording.isRecording = true;
+                recording.startTime = Date.now();
+                recording.keystrokes = [];
+                recording.transcription = [];
+                recording.gameFrames = [];
+                recording.gameId = generateGameId();
+                recording.actionCounter = 0;
+                updateRecordingUI();
+            }
+        }
+
+        function stopRecording() {
+            recording.isRecording = false;
+
+            if (recording.mediaRecorder && recording.mediaRecorder.state !== 'inactive') {
+                recording.mediaRecorder.stop();
+                recording.mediaRecorder.stream.getTracks().forEach(track => track.stop());
+            }
+
+            if (recording.recognition) {
+                recording.recognition.stop();
+            }
+
+            updateRecordingUI();
+        }
+
+        function toggleRecording() {
+            if (recording.isRecording) {
+                stopRecording();
+            } else {
+                startRecording();
+            }
+        }
+
+        function updateRecordingUI() {
+            const recordBtn = document.getElementById('recordBtn');
+            const exportBtn = document.getElementById('exportBtn');
+            const status = document.getElementById('recordingStatus');
+
+            if (recording.isRecording) {
+                recordBtn.textContent = '⏹️ Stop Recording';
+                recordBtn.classList.add('recording');
+                exportBtn.classList.add('disabled');
+                exportBtn.disabled = true;
+                status.textContent = 'Recording gameplay and audio...';
+                status.classList.add('active');
+            } else {
+                recordBtn.textContent = '🔴 Start Recording';
+                recordBtn.classList.remove('recording');
+
+                if (recording.keystrokes.length > 0) {
+                    exportBtn.classList.remove('disabled');
+                    exportBtn.disabled = false;
+                    const transcriptCount = recording.transcription.length;
+                    status.textContent = `Recording complete. ${recording.keystrokes.length} actions, ${transcriptCount} speech segments recorded.`;
+                } else {
+                    status.textContent = 'Ready to record gameplay and audio';
+                }
+                status.classList.remove('active');
+            }
+        }
+
+        function updateStatusMessage(message) {
+            const status = document.getElementById('recordingStatus');
+            if (recording.isRecording) {
+                status.textContent = message;
+            }
+        }
+
+        function exportRecording() {
+            if (recording.gameFrames.length === 0) {
+                alert('No recording data to export');
+                return;
+            }
+
+            // Create JSONL content (each line is a JSON object)
+            const jsonlContent = recording.gameFrames
+                .map(frame => JSON.stringify(frame))
+                .join('\n');
+
+            // Download JSONL file
+            const jsonlBlob = new Blob([jsonlContent], { type: 'application/jsonl' });
+            const jsonlUrl = URL.createObjectURL(jsonlBlob);
+            const jsonlLink = document.createElement('a');
+            jsonlLink.href = jsonlUrl;
+            const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, '-');
+            jsonlLink.download = `pizza-game-aligned-${recording.gameId}-${timestamp}.jsonl`;
+            document.body.appendChild(jsonlLink);
+            jsonlLink.click();
+            document.body.removeChild(jsonlLink);
+            URL.revokeObjectURL(jsonlUrl);
+
+            // Also create legacy JSON format for backwards compatibility
+            const legacyData = {
+                session: {
+                    gameId: recording.gameId,
+                    startTime: new Date(recording.startTime).toISOString(),
+                    duration: Date.now() - recording.startTime,
+                    totalActions: recording.keystrokes.length,
+                    totalFrames: recording.gameFrames.length
+                },
+                keystrokes: recording.keystrokes,
+                transcription: recording.transcription,
+                audioAvailable: recording.audioChunks.length > 0,
+                alignedFrames: recording.gameFrames
+            };
+
+            const legacyBlob = new Blob([JSON.stringify(legacyData, null, 2)], { type: 'application/json' });
+            const legacyUrl = URL.createObjectURL(legacyBlob);
+            const legacyLink = document.createElement('a');
+            legacyLink.href = legacyUrl;
+            legacyLink.download = `pizza-game-legacy-${recording.gameId}-${timestamp}.json`;
+            document.body.appendChild(legacyLink);
+            legacyLink.click();
+            document.body.removeChild(legacyLink);
+            URL.revokeObjectURL(legacyUrl);
+
+            // Download audio if available
+            if (recording.audioChunks.length > 0) {
+                const audioBlob = new Blob(recording.audioChunks, { type: 'audio/webm' });
+                const audioUrl = URL.createObjectURL(audioBlob);
+                const audioLink = document.createElement('a');
+                audioLink.href = audioUrl;
+                audioLink.download = `pizza-game-audio-${recording.gameId}-${timestamp}.webm`;
+                document.body.appendChild(audioLink);
+                audioLink.click();
+                document.body.removeChild(audioLink);
+                URL.revokeObjectURL(audioUrl);
+            }
+
+            // Show summary
+            alert(`Exported ${recording.gameFrames.length} aligned game frames!\n\nFiles:\n- JSONL: aligned game data\n- JSON: legacy format\n- WebM: audio recording (if available)`);
+        }
+
+        function alignTranscriptionWithKeystrokes(keystrokes, transcription) {
+            const aligned = [];
+
+            transcription.forEach(speech => {
+                // Find keystrokes that occurred around the same time as this speech
+                const timeWindow = 2000; // 2 second window
+                const nearbyKeystrokes = keystrokes.filter(k =>
+                    Math.abs(k.timestamp - speech.timestamp) < timeWindow
+                );
+
+                aligned.push({
+                    speech: speech,
+                    nearbyActions: nearbyKeystrokes,
+                    timeWindow: timeWindow
+                });
+            });
+
+            return aligned;
         }
 
         // Start game
